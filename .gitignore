@@ -27,6 +27,10 @@ possible-dupes.txt
 # ===== 日志 =====
 *.log
 
+# ===== 守护进程 / 本机配置 =====
+config.json
+.sync.lock
+
 # ===== Python =====
 __pycache__/
 *.pyc

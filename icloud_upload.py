@@ -1,8 +1,10 @@
 """iCloud 上传器 v9
 - HEIC/HEIF → converted/<stem>.jpg ; MP4 → converted_mov/<stem>.mov（网页不支持 HEIC/MP4）
-- 单批 ≤1000 件（再按 ≤3GB 封顶），每批前重载页面清空面板残留并刷新会话
-- 完成判定：以图库计数(照片+视频)增量为准；重复项(已在库)计入完成
-用法: python icloud_run.py [--batch N] [--limit N]
+- 单批 ≤1000 件（再按字节上限封顶），每批前重载页面清空面板残留并刷新会话
+- 完成判定：以面板状态稳定为准；重复项(已在库)计入完成
+用法: python icloud_upload.py [--batch N] [--limit N] [--headless] [--wait-login 秒]
+  --headless      无头运行（iCloud 风控对人机特征敏感，服务器/守护场景自行权衡）
+  --wait-login    等待人工完成登录的秒数（默认 1500；定时/守护场景建议 60-120）
 """
 import argparse
 import json
@@ -174,6 +176,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--limit", type=int)
     ap.add_argument("--batch", type=int, default=MAX_BATCH)
+    ap.add_argument("--headless", action="store_true")
+    ap.add_argument("--wait-login", type=int, default=1500)
     args = ap.parse_args()
     args.batch = min(args.batch, MAX_BATCH)
 
@@ -187,16 +191,20 @@ def main():
     batches = pack(queue, args.batch, MAX_BATCH_BYTES)
     log(f"总 {len(files)}，已传 {len(done)}，暂缓 {len(defer)}，本轮 {len(queue)} 件 / {len(batches)} 批")
 
+    if not queue:
+        log("没有待传文件，跳过启动浏览器")
+        return 0
+
     with sync_playwright() as p:
         ctx = p.chromium.launch_persistent_context(
-            str(PROFILE), headless=False, viewport={"width": 1400, "height": 950},
+            str(PROFILE), headless=args.headless, viewport={"width": 1400, "height": 950},
             locale="zh-CN", args=["--password-store=basic", "--no-proxy-server"])
         try:
             page = ctx.pages[0] if ctx.pages else ctx.new_page()
             restore_cookies(ctx)
             frame = open_photos(page)
             if not frame:
-                if not wait_login(page, 1500):
+                if not wait_login(page, args.wait_login):
                     log("未登录"); return 1
                 frame = open_photos(page)
                 if not frame:
@@ -208,7 +216,7 @@ def main():
                 frame = ensure_frame(page)
                 if not frame:
                     log("无法进入照片页，等待重新登录...")
-                    if not wait_login(page, 1500):
+                    if not wait_login(page, args.wait_login):
                         return 3
                     frame = ensure_frame(page)
                     if not frame:

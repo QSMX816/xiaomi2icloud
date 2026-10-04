@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.qsmx816.xiaomi2icloud</string>
+    <key>ProgramArguments</key>
+    <array>
+        <!-- 修改为你的 Python3 与克隆路径 -->
+        <string>/usr/bin/python3</string>
+        <string>/Users/你的用户名/xiaomi2icloud/daemon.py</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>/tmp/xiaomi2icloud-daemon.log</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/xiaomi2icloud-daemon.err</string>
+</dict>
+</plist>

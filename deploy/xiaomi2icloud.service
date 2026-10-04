@@ -1,0 +1,15 @@
+[Unit]
+Description=xiaomi2icloud 照片自动同步（小米云 → iCloud）
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# %h = 用户家目录。若克隆在别处或 Python 路径不同，请对应修改。
+WorkingDirectory=%h/xiaomi2icloud
+ExecStart=/usr/bin/python3 %h/xiaomi2icloud/daemon.py
+Restart=on-failure
+RestartSec=120
+
+[Install]
+WantedBy=default.target

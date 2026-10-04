@@ -1,8 +1,16 @@
 # xiaomi2icloud
 
-把**小米云相册**全量迁移到 **iCloud 照片**的一站式工具链：登录 → 全量下载（校验+断点续传）→ HEIC/MP4 转码 → 分批上传 iCloud → 云端对账验证。
+把**小米云相册**同步到 **iCloud 照片**的一站式工具链：既支持**一次性全量迁移**，也支持**守护进程自动增量同步**（新增照片自动下载、转码、上传，可 systemd / launchd / 任务计划常驻）。
 
 全程本地运行，不经过任何第三方服务器；两端的登录态只保存在本地 cookie 文件里。
+
+## 功能
+
+- **全量迁移**：登录 → 下载（SHA1 逐文件校验）→ HEIC/MP4 转码 → 分批上传 iCloud → CloudKit 对账
+- **自动增量同步**：`daemon.py` 定时轮询小米云，新增照片自动走完整流水线；**只增不删**（绝不删 iCloud 里的任何内容）
+- **断点续传**：每一步幂等可重跑，中断了直接重启，进度都在
+- **自动续签 + 通知**：会话过期自动无头续签；彻底失效（需要短信/双重验证码）时通过 `notify_command` 提醒人工登录一次，之后自动恢复
+- **跨平台**：Linux / macOS / Windows（Python + Playwright + ffmpeg），各平台开机常驻方案见 `deploy/`
 
 ## 为什么需要它
 
@@ -10,22 +18,24 @@
 - iCloud（中国区 `icloud.com.cn`）没有公开的照片上传 API，`pyicloud` 等库不支持国区；
 - 网页端手动拖几万张照片不现实——浏览器会崩、会断、断点无从谈起。
 
-本工具链把整件事拆成 5 个可断点续传的步骤，每一步都可以单独重跑。
-
-## 迁移流水线
+## 流水线
 
 ```
-┌─────────────┐   ┌──────────────┐   ┌───────────────┐   ┌─────────────┐   ┌──────────────┐
-│ 1. 登录小米云 │ → │ 2. 全量下载   │ → │ 3. 转码        │ → │ 4. 登录iCloud │ → │ 5. 分批上传    │
-│  mi_login.py │   │ mi_download.py│   │ heic/mov_convert│  │ icloud_login │   │ icloud_upload │
-└─────────────┘   └──────────────┘   └───────────────┘   └─────────────┘   └──────────────┘
-                                                                  ↓
-                                                    6. 对账: icloud_recon.py
+        ┌──────────────────────────── daemon.py（定时循环）──────────────────────────┐
+        │                                                                            │
+        │   ①登录(一次)      ②增量下载           ③转码                ④分批上传        │
+        │  mi_login.py   mi_download/sync   heic/mov_convert    icloud_upload.py     │
+        │  icloud_login  （按ID/SHA1对比）   （HEIC→JPG,MP4→MOV） （面板状态判定）      │
+        │                                                                            │
+        │                          ⑤对账: icloud_recon.py（手动）                      │
+        └────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ## 安装
 
 ```bash
+git clone https://github.com/QSMX816/xiaomi2icloud.git
+cd xiaomi2icloud
 pip install -r requirements.txt
 playwright install chromium
 
@@ -34,84 +44,116 @@ sudo apt install ffmpeg        # Debian/Ubuntu
 brew install ffmpeg            # macOS
 ```
 
-## 使用
-
-所有脚本都在项目根目录下运行，数据也都落在根目录（`photos/`、`converted/` 等）。
-
-### 1. 登录小米云（人工一次）
+## 快速开始：先完成一次登录
 
 ```bash
-python mi_login.py
+python mi_login.py        # 弹出浏览器 → 小米账号 + 短信验证码
+python icloud_login.py    # 弹出浏览器 → Apple ID + 双重认证验证码
 ```
 
-弹出浏览器，手机号 + 短信验证码登录 `i.mi.com`，检测到登录态后自动保存 `cookies.json`。
-之后 cookie 过期时可用 `python mi_login.py --refresh` 无头静默续签（passToken 仍有效时无需人工）。
+两个登录各只需一次；之后 cookie 过期由同步流程自动无头续签。
 
-### 2. 全量下载小米云相册
+## 用法 A：自动定时同步（推荐）
+
+```bash
+cp config.example.json config.json   # 按需修改（间隔、并发、通知命令）
+python sync.py --dry-run             # 检查将做什么，不联网不改动
+python daemon.py                     # 前台常驻，Ctrl+C 退出
+```
+
+首轮会执行完整迁移（数量大时以天计，可随时中断重跑），之后每轮只处理增量。
+同步期间弹出 Chromium 窗口属正常现象（iCloud 上传/续签需要真实浏览器）。
+
+### 配置说明（config.json）
+
+| 字段 | 默认 | 说明 |
+|---|---|---|
+| `interval_minutes` | 60 | 每轮间隔（分钟） |
+| `download_workers` | 3 | 下载并发线程 |
+| `upload_batch` | 1000 | 上传单批文件数上限（网页端上限 1000） |
+| `upload_headless` | false | 上传浏览器无头模式（**风控敏感，慎开**） |
+| `login_wait_seconds` | 90 | 等待人工完成登录的秒数 |
+| `mi_album_id` | "1" | 小米云相册 ID（"1" 为全部照片） |
+| `notify_command` | [] | 失败/需登录时的通知命令，支持 `{title}` `{body}` 占位 |
+
+通知命令示例：
+
+```json
+"notify_command": ["notify-send", "{title}", "{body}"]
+"notify_command": ["osascript", "-e", "display notification \"{body}\" with title \"{title}\""]
+```
+
+### 开机常驻
+
+| 系统 | 方案 | 文件 |
+|---|---|---|
+| Linux | systemd 用户服务（守护模式，推荐） | `deploy/xiaomi2icloud.service` |
+| Linux | systemd timer（每小时单轮，替代方案） | `deploy/xiaomi2icloud-sync.service` + `deploy/xiaomi2icloud.timer` |
+| macOS | launchd | `deploy/com.qsmx816.xiaomi2icloud.plist` |
+| Windows | 任务计划 / 启动文件夹 | 见 `deploy/windows.md` |
+
+Linux systemd 示例：
+
+```bash
+mkdir -p ~/.config/systemd/user
+cp deploy/xiaomi2icloud.service ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now xiaomi2icloud
+journalctl --user -u xiaomi2icloud -f      # 看日志
+```
+
+### 会话过期怎么办
+
+- 小米云 `passToken`、iCloud 登录态在有效期内都能**自动无头续签**，无需人工；
+- 彻底失效时（需短信验证码 / 双重认证，无法自动化），同步会通过 `notify_command` 提醒你：
+  到项目目录手动跑一次 `python mi_login.py` 或 `python icloud_login.py`，之后守护自动恢复。
+
+## 用法 B：手动分步（一次性迁移 / 排查）
+
+### 1. 全量下载小米云相册
 
 ```bash
 python mi_download.py                # 全量
 python mi_download.py --workers 5    # 并发 5 线程（默认 3）
 ```
 
-- SHA1 逐文件校验，重跑自动跳过已下载且校验通过的文件；
-- 按云端的拍摄时间回写文件 mtime；JPEG 缺 `DateTimeOriginal` 时按云端 EXIF 补写；
-- 下载清单写入 `manifest.jsonl`，失败项汇总到 `failures.json`；
-- 会话过期时以退出码 2 结束，续签后直接重跑即可续传。
+SHA1 逐文件校验、按云端拍摄时间回写 mtime、JPEG 缺 `DateTimeOriginal` 时补写；
+清单写入 `manifest.jsonl`，失败项汇总 `failures.json`；会话过期以退出码 2 结束，重跑即续传。
 
-### 3. 转码（iCloud 网页上传不支持 HEIC / MP4）
+### 2. 转码（iCloud 网页上传不支持 HEIC / MP4）
 
 ```bash
 python heic_convert.py    # photos/*.HEIC → converted/*.jpg（保留 EXIF/GPS/ICC/mtime）
 python mov_convert.py     # photos/*.mp4  → converted_mov/*.mov（ffmpeg 无损重封装）
 ```
 
-### 4. 登录 iCloud（人工一次）
+### 3. 上传 iCloud
 
 ```bash
-python icloud_login.py
-```
-
-弹出浏览器，登录 Apple ID（含双重认证验证码），保存 `icloud-cookies.json`。
-同样支持 `--refresh` 静默续签。
-
-### 5. 分批上传 iCloud 照片
-
-```bash
-python icloud_upload.py              # 默认每批 ≤1000 件且 ≤3GB
+python icloud_upload.py              # 单批 ≤1000 件，自动做转码路径替换
 python icloud_upload.py --batch 200  # 网络差时调小批次
 ```
 
-工作原理（Playwright 驱动真实 Chromium）：
+Playwright 驱动真实 Chromium；完成判定以上传面板状态稳定为准；“重复项目”计为完成；
+已传清单在 `icloud-upload-state.json`，重跑自动跳过；超时批次留待下轮，不会误标。
 
-- 自动做 HEIC→`converted/*.jpg`、MP4→`converted_mov/*.mov` 的路径替换，队列里直接放原始文件即可；
-- 每批提交前重载页面，清掉面板残留并刷新会话；
-- **完成判定以图库计数增量为准**（“xx 张照片，xx 个视频”），面板文本里的“重复项目/不支持/失败”单独归类；
-- 已上传清单记在 `icloud-upload-state.json`，重跑自动跳过；超时的批次留待下轮，不会误标完成。
-
-上传器是有界面的（`headless=False`）：iCloud 风控对人机特征敏感，保留真实窗口最稳。
-
-### 6. 对账验证（可选）
+### 4. 对账验证（可选）
 
 ```bash
 python icloud_recon.py
 ```
 
-清空 iCloud 页面的 IndexedDB（保留 cookie）强制重新全量同步，旁听 CloudKit 查询响应，解出云端全部文件名，与本地 `photos/` 对账，报告“本地 N 张、已在云 M 张、仍需上传 K 张”。
+清空 iCloud 页面 IndexedDB（保留 cookie）强制全量重同步，旁听 CloudKit 响应解出云端
+全部文件名，与本地 `photos/` 对账，报告“本地 N 张、已在云 M 张、仍需上传 K 张”。
 
-诊断工具：
-
-| 脚本 | 用途 |
-|---|---|
-| `icloud_ck_dump.py` | 旁听并保存 iCloud 照片的 CloudKit 同步响应（看原始 API） |
-| `icloud_verify.py` | 滚动照片网格，从 DOM 里提取文件名做抽样核对 |
+诊断工具：`icloud_ck_dump.py`（旁听保存 CloudKit 原始响应）、`icloud_verify.py`（DOM 抽样核对）。
 
 ## 注意事项
 
-- **凭据安全**：`cookies.json` / `icloud-cookies.json` / `browser-profile/` / `icloud-profile*/` 等于两端的账号登录态，**不要提交、不要截图、不要发给别人**（`.gitignore` 已排除）。
-- **限速现实**：上传速度取决于 iCloud 网页端，几万张照片请按天计耐心；工具全部可断点续传，中断了直接重跑。
-- **重复照片**：iCloud 按“重复项目”提示去重，上传器把重复计为完成，不会死循环。
-- 本项目为个人数据迁移用途的非官方工具，与小米/Apple 无关；使用即自担相应服务条款风险。
+- **凭据安全**：`cookies.json` / `icloud-cookies.json` / `browser-profile/` / `icloud-profile*/` 等于两端账号登录态，**不要提交、不要截图、不要发给别人**（`.gitignore` 已排除）。
+- **只增不删**：同步方向为小米云 → iCloud 单向追加；小米端删除照片不会同步，也绝不会删除 iCloud 里的内容。
+- **限速现实**：上传速度取决于 iCloud 网页端，几万张照片请按天计耐心；所有步骤可断点续传，中断直接重跑。
+- 本项目为个人数据同步用途的非官方工具，与小米/Apple 无关；使用即自担相应服务条款风险。
 
 ## 技术笔记
 

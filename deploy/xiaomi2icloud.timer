@@ -1,0 +1,10 @@
+[Unit]
+Description=每小时触发一次 xiaomi2icloud 增量同步
+
+[Timer]
+OnCalendar=hourly
+Persistent=true
+RandomizedDelaySec=120
+
+[Install]
+WantedBy=timers.target

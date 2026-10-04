@@ -29,7 +29,7 @@ def convert_one(src: Path):
     tmp = dst.with_suffix(".mov.part")
     r = subprocess.run(
         ["ffmpeg", "-y", "-loglevel", "error", "-i", str(src),
-         "-c", "copy", "-movflags", "+faststart", str(tmp)],
+         "-c", "copy", "-movflags", "+faststart", "-f", "mov", str(tmp)],
         capture_output=True, text=True,
     )
     if r.returncode != 0:

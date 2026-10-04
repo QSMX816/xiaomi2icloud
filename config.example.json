@@ -1,0 +1,9 @@
+{
+  "interval_minutes": 60,
+  "download_workers": 3,
+  "upload_batch": 1000,
+  "upload_headless": false,
+  "login_wait_seconds": 90,
+  "mi_album_id": "1",
+  "notify_command": []
+}
