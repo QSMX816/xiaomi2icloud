@@ -1,0 +1,34 @@
+# ===== 凭据 / 登录态（等于账号本身，绝不提交）=====
+cookies.json
+icloud-cookies.json
+browser-profile/
+icloud-profile/
+icloud-profile-test/
+
+# ===== 私人照片与迁移状态 =====
+photos/
+converted/
+converted_mov/
+manifest.jsonl
+failures.json
+icloud-upload-state.json
+
+# ===== 对账 / 抓包输出（含私人文件名）=====
+icloud-names.json
+icloud-recon-names.json
+recon.json
+icloud-verify.json
+icloud-ck-dump.json
+icloud-ck-req.json
+probe-*.json
+*-dump*.txt
+possible-dupes.txt
+
+# ===== 日志 =====
+*.log
+
+# ===== Python =====
+__pycache__/
+*.pyc
+.venv/
+venv/
